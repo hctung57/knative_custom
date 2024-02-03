@@ -18,6 +18,8 @@ package net
 
 import (
 	"context"
+	"log"
+	"net"
 	"net/http"
 	"sort"
 	"sync"
@@ -207,7 +209,6 @@ func noop() {}
 func (rt *revisionThrottler) acquireDest(ctx context.Context) (func(), *podTracker) {
 	rt.mux.RLock()
 	defer rt.mux.RUnlock()
-
 	if rt.clusterIPTracker != nil {
 		return noop, rt.clusterIPTracker
 	}
@@ -385,7 +386,6 @@ func assignSlice(trackers []*podTracker, selfIndex, numActivators, cc int) []*po
 	if numActivators == 1 {
 		return trackers
 	}
-
 	// If the number of pods is not divisible by the number of activators, we allocate one pod to each activator exclusively.
 	// examples
 	// 1. we have 20 pods and 3 activators -> we'd get 2 remnants so activator with index 0,1 would each pick up a unique tracker
@@ -497,6 +497,26 @@ func (t *Throttler) Run(ctx context.Context, probeTransport http.RoundTripper, u
 	t.run(rbm.updates())
 }
 
+func isInRange(activatorIP string, appSocket string) bool {
+	appIP, _, err := net.SplitHostPort(appSocket)
+	if err != nil {
+		log.Println("hctung57: Error splitting host and port:", err)
+		return true
+	}
+	convertActivatorIP := net.ParseIP(activatorIP)
+	if convertActivatorIP == nil {
+		log.Println("Invalid IP address.")
+		return true
+	}
+
+	// Create an IPNet structure with a subnet mask of 24 bits
+	ipNet := &net.IPNet{
+		IP:   convertActivatorIP.Mask(net.CIDRMask(24, 32)),
+		Mask: net.CIDRMask(24, 32),
+	}
+	return ipNet.Contains(net.ParseIP(appIP))
+}
+
 func (t *Throttler) run(updateCh <-chan revisionDestsUpdate) {
 	for {
 		select {
@@ -505,6 +525,16 @@ func (t *Throttler) run(updateCh <-chan revisionDestsUpdate) {
 				t.logger.Info("The Throttler has stopped.")
 				return
 			}
+			if len(update.Dests) >= 2 {
+				for endpoint := range update.Dests {
+					if !isInRange(t.ipAddress, endpoint) {
+						delete(update.Dests, endpoint)
+					}
+				}
+			}
+
+			// delete(update.Dests, "10.233.75.55:8012")
+			log.Print("hctung57 logs update:", update)
 			t.handleUpdate(update)
 		case eps := <-t.epsUpdateCh:
 			t.handlePubEpsUpdate(eps)

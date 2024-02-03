@@ -88,7 +88,6 @@ func endpointsToDests(endpoints *corev1.Endpoints, portName string) (ready, notR
 			}
 		}
 	}
-
 	return ready, notReady
 }
 
